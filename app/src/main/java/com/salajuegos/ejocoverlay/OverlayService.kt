@@ -151,27 +151,21 @@ class OverlayService : Service() {
         txtReloj?.setTextColor(Color.parseColor(colorReloj))
     }
 
-    private fun leerTimestampLocal(ruta: String): Long {
-        // 1. Lectura directa estándar
-        try {
-            val f = File(ruta)
-            if (f.exists() && f.canRead()) {
-                val v = f.readText().trim().toLongOrNull() ?: 0L
-                if (v > 1700000000L) return v
+    private fun leerTimestampLocal(nombreArchivo: String): Long {
+        val rutas = listOf(
+            "/data/local/tmp/$nombreArchivo",
+            "/sdcard/Download/$nombreArchivo"
+        )
+        for (ruta in rutas) {
+            try {
+                val f = File(ruta)
+                if (f.exists() && f.canRead()) {
+                    val v = f.readText().trim().toLongOrNull() ?: 0L
+                    if (v > 1700000000L) return v
+                }
+            } catch (_: Exception) {
             }
-        } catch (_: Exception) {
         }
-
-        // 2. Lectura mediante subproceso local 'cat' (evita bloqueo Scoped Storage sin usar Wi-Fi)
-        try {
-            val proceso = Runtime.getRuntime().exec(arrayOf("sh", "-c", "cat $ruta 2>/dev/null"))
-            val salida = proceso.inputStream.bufferedReader().use { it.readText().trim() }
-            proceso.waitFor()
-            val v = salida.toLongOrNull() ?: 0L
-            if (v > 1700000000L) return v
-        } catch (_: Exception) {
-        }
-
         return 0L
     }
 
