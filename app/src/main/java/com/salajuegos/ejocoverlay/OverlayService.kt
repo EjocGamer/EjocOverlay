@@ -151,66 +151,76 @@ class OverlayService : Service() {
         txtReloj?.setTextColor(Color.parseColor(colorReloj))
     }
 
+    private fun leerTimestampLocal(ruta: String): Long {
+        // 1. Lectura directa estándar
+        try {
+            val f = File(ruta)
+            if (f.exists() && f.canRead()) {
+                val v = f.readText().trim().toLongOrNull() ?: 0L
+                if (v > 1700000000L) return v
+            }
+        } catch (_: Exception) {
+        }
+
+        // 2. Lectura mediante subproceso local 'cat' (evita bloqueo Scoped Storage sin usar Wi-Fi)
+        try {
+            val proceso = Runtime.getRuntime().exec(arrayOf("sh", "-c", "cat $ruta 2>/dev/null"))
+            val salida = proceso.inputStream.bufferedReader().use { it.readText().trim() }
+            proceso.waitFor()
+            val v = salida.toLongOrNull() ?: 0L
+            if (v > 1700000000L) return v
+        } catch (_: Exception) {
+        }
+
+        return 0L
+    }
+
     private fun verificarArchivosEstado() {
         val view = overlayView ?: return
         val ahoraSeg = System.currentTimeMillis() / 1000L
         val ahoraMs = System.currentTimeMillis()
 
-        val archivoLibre = File("/sdcard/Download/sala_libre.txt")
-        val archivoFin = File("/sdcard/Download/sala_fin.txt")
+        // 1. Tiempo Libre / Ventana de Espera: visible de forma PERMANENTE
+        val inicioLibre = leerTimestampLocal("/sdcard/Download/sala_libre.txt")
+        if (inicioLibre > 0L && ahoraSeg >= inicioLibre) {
+            ultimoFinRegistrado = 0L
 
-        // 1. Modo Tiempo Libre / Ventana de Espera: visible de forma PERMANENTE
-        if (archivoLibre.exists()) {
-            val inicioLibre = try {
-                archivoLibre.readText().trim().toLongOrNull() ?: 0L
-            } catch (e: Exception) { 0L }
+            val transcurrido = (ahoraSeg - inicioLibre).toInt()
+            val h = transcurrido / 3600
+            val m = (transcurrido % 3600) / 60
+            val s = transcurrido % 60
 
-            if (inicioLibre > 1700000000L && ahoraSeg >= inicioLibre) {
-                ultimoFinRegistrado = 0L
-
-                val transcurrido = (ahoraSeg - inicioLibre).toInt()
-                val h = transcurrido / 3600
-                val m = (transcurrido % 3600) / 60
-                val s = transcurrido % 60
-
-                txtMensaje?.text = "⏱️ Tiempo libre / adicional:"
-                txtReloj?.text = String.format("%02d:%02d:%02d", h, m, s)
-                actualizarEstiloCaja("#38BDF8", "#7DD3FC", "#FFFFFF")
-                view.visibility = View.VISIBLE
-                return
-            }
+            txtMensaje?.text = "⏱️ Tiempo libre / adicional:"
+            txtReloj?.text = String.format("%02d:%02d:%02d", h, m, s)
+            actualizarEstiloCaja("#38BDF8", "#7DD3FC", "#FFFFFF")
+            view.visibility = View.VISIBLE
+            return
         }
 
-        // 2. Modo Temporizador normal (sala_fin.txt): 5s al agregar tiempo + permanente en alerta de 2 min
-        if (archivoFin.exists()) {
-            val fin = try {
-                archivoFin.readText().trim().toLongOrNull() ?: 0L
-            } catch (e: Exception) { 0L }
-
-            val restante = (fin - ahoraSeg).toInt()
-            if (fin > 1700000000L && restante > 0) {
-                if (fin != ultimoFinRegistrado) {
-                    ultimoFinRegistrado = fin
-                    ocultarEnMillis = ahoraMs + DURACION_VISIBLE_MS
-                }
-
-                val h = restante / 3600
-                val m = (restante % 3600) / 60
-                val s = restante % 60
-
-                txtMensaje?.text = "⏳ El TV se apagará en:"
-                txtReloj?.text = String.format("%02d:%02d:%02d", h, m, s)
-
-                val enAlerta2Min = restante <= 120
-                if (enAlerta2Min) {
-                    actualizarEstiloCaja("#EF4444", "#FCA5A5", "#FACC15")
-                    view.visibility = View.VISIBLE
-                } else {
-                    actualizarEstiloCaja("#22C55E", "#86EFAC", "#FFFFFF")
-                    view.visibility = if (ahoraMs < ocultarEnMillis) View.VISIBLE else View.GONE
-                }
-                return
+        // 2. Temporizador normal: 5s al agregar tiempo + permanente en alerta de 2 min
+        val fin = leerTimestampLocal("/sdcard/Download/sala_fin.txt")
+        val restante = (fin - ahoraSeg).toInt()
+        if (fin > 0L && restante > 0) {
+            if (fin != ultimoFinRegistrado) {
+                ultimoFinRegistrado = fin
+                ocultarEnMillis = ahoraMs + DURACION_VISIBLE_MS
             }
+
+            val h = restante / 3600
+            val m = (restante % 3600) / 60
+            val s = restante % 60
+
+            txtMensaje?.text = "⏳ El TV se apagará en:"
+            txtReloj?.text = String.format("%02d:%02d:%02d", h, m, s)
+
+            if (restante <= 120) {
+                actualizarEstiloCaja("#EF4444", "#FCA5A5", "#FACC15")
+                view.visibility = View.VISIBLE
+            } else {
+                actualizarEstiloCaja("#22C55E", "#86EFAC", "#FFFFFF")
+                view.visibility = if (ahoraMs < ocultarEnMillis) View.VISIBLE else View.GONE
+            }
+            return
         } else {
             ultimoFinRegistrado = 0L
         }
