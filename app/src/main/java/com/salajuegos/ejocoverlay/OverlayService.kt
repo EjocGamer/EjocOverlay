@@ -89,14 +89,14 @@ class OverlayService : Service() {
         if (accion != null) {
             when (accion) {
                 "TIMER" -> {
-                    desactivarBloqueoPantalla()
+                    des
                     memModo = "TIMER"
                     memFin = valorTs
                     memInicioLibre = 0L
                     ultimoLibreRegistrado = 0L
                 }
                 "LIBRE" -> {
-                    desactivarBloqueoPantalla()
+                    des
                     memModo = "LIBRE"
                     memInicioLibre = valorTs
                     memFin = 0L
@@ -105,7 +105,7 @@ class OverlayService : Service() {
                     ocultarEnMillis = System.currentTimeMillis() + DURACION_LIBRE_MS
                 }
                 "ESPERA" -> {
-                    desactivarBloqueoPantalla()
+                    des
                     memModo = "ESPERA"
                     memInicioLibre = valorTs
                     memFin = 0L
@@ -114,10 +114,10 @@ class OverlayService : Service() {
                 "PERMITIR" -> {
                     // Ventana de gracia de 20s al encender el TV desde la app del celular
                     autorizadoHastaMillis = System.currentTimeMillis() + 20000L
-                    desactivarBloqueoPantalla()
+                    des
                 }
                 "CLEAR" -> {
-                    desactivarBloqueoPantalla()
+                    des
                     memModo = "NONE"
                     memFin = 0L
                     memInicioLibre = 0L
@@ -155,7 +155,7 @@ class OverlayService : Service() {
         if (ahoraMs < autorizadoHastaMillis) return
         if (tieneSesionActiva()) return
 
-        activarBloqueoPantalla()
+        
     }
 
     private fun activarBloqueoPantalla() {
@@ -164,6 +164,24 @@ class OverlayService : Service() {
         bloqueoPantallaActivo = true
 
         txtRelojBloqueo?.text = "00:00:00"
+        bloqueoView.visibility = View.VISIBLE
+        tarjetaOverlayView?.visibility = View.GONE
+        silenciarAudioTv(true)
+    }
+
+    private fun activarBloqueoPantalla() {
+        intentarCrearVentanas()
+        val bloqueoView = rootBloqueoView ?: return
+        bloqueoPantallaActivo = true
+
+        val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
+        if (fondoResId != 0) {
+            imgFondoBloqueo?.setImageResource(fondoResId)
+            imgFondoBloqueo?.visibility = View.VISIBLE
+        }
+
+        imgLogoBloqueo?.visibility = View.GONE
+        txtRelojBloqueo?.visibility = View.GONE
         bloqueoView.visibility = View.VISIBLE
         tarjetaOverlayView?.visibility = View.GONE
         silenciarAudioTv(true)
@@ -238,20 +256,19 @@ class OverlayService : Service() {
                     )
                 }
 
-                val logoImg = ImageView(ctx).apply {
-                    adjustViewBounds = true
-                    scaleType = ImageView.ScaleType.FIT_CENTER
-                    layoutParams = LinearLayout.LayoutParams(dp(420), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                        gravity = Gravity.CENTER_HORIZONTAL
+                val fondoImg = ImageView(ctx).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    layoutParams = FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                    val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
+                    if (fondoResId != 0) {
+                        setImageResource(fondoResId)
                     }
-                    val logoResId = resources.getIdentifier("logo_ejoc", "drawable", packageName)
-                    if (logoResId != 0) {
-                        setImageResource(logoResId)
-                    } else {
-                        visibility = View.GONE
-                    }
+                    visibility = View.VISIBLE
                 }
-                imgLogoBloqueo = logoImg
+                imgFondoBloqueo = fondoImg
 
                 val relojBloqueo = TextView(ctx).apply {
                     text = "00:00:00"
