@@ -20,7 +20,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
-import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -28,7 +27,6 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.io.File
@@ -47,10 +45,6 @@ class OverlayService : Service() {
     private var ultimoFinRegistrado: Long = 0L
     private var ultimoLibreRegistrado: Long = 0L
     private var ocultarEnMillis: Long = 0L
-    private var diagnosticoHastaMillis: Long = 0L
-
-    // Diagnóstico de encendido físico
-    private var ultimoScreenOnMs: Long = 0L
 
     // Estados en memoria: "TIMER", "LIBRE", "ESPERA", "NONE"
     private var memModo: String = "NONE"
@@ -62,8 +56,9 @@ class OverlayService : Service() {
     private var autorizadoHastaMillis: Long = 0L
     private var audioSilenciadoPorBloqueo: Boolean = false
 
-    private val DURACION_TIMER_MS = 5000L  // 5 segundos visible al agregar tiempo
-    private val DURACION_LIBRE_MS = 10000L // 10 segundos visible al iniciar Tiempo Libre
+    private val DURACION_TIMER_MS = 5000L   // 5 segundos visible al agregar tiempo
+    private val DURACION_LIBRE_MS = 10000L  // 10 segundos visible al iniciar Tiempo Libre
+    private val INTERVALO_VIGILANCIA_MS = 2000L // 2 segundos para reducir carga continua en TV
 
     private var fondoDrawable: Drawable? = null
     @Volatile private var preparandoFondo: Boolean = false
@@ -71,9 +66,6 @@ class OverlayService : Service() {
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_SCREEN_ON) {
-                ultimoScreenOnMs = System.currentTimeMillis()
-                Log.d("EJOC_DIAG", "ACTION_SCREEN_ON recibido en t=$ultimoScreenOnMs")
-                Toast.makeText(applicationContext, "SCREEN_ON recibido", Toast.LENGTH_SHORT).show()
                 evaluarEncendidoFisico()
             }
         }
@@ -82,7 +74,7 @@ class OverlayService : Service() {
     private val bucleVigilancia = object : Runnable {
         override fun run() {
             verificarArchivosEstado()
-            handler.postDelayed(this, 1000L)
+            handler.postDelayed(this, INTERVALO_VIGILANCIA_MS)
         }
     }
 
@@ -97,6 +89,9 @@ class OverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intentarCrearVentanas()
+        if (fondoDrawable == null && !preparandoFondo) {
+            prepararGifUnaVez()
+        }
 
         val accion = intent?.getStringExtra("accion")
         val valorTs = intent?.getLongExtra("ts", 0L) ?: 0L
@@ -166,14 +161,8 @@ class OverlayService : Service() {
 
     private fun evaluarEncendidoFisico() {
         val ahoraMs = System.currentTimeMillis()
-        if (ahoraMs < autorizadoHastaMillis) {
-            Log.d("EJOC_DIAG", "Ignorado por autorizadoHastaMillis")
-            return
-        }
-        if (tieneSesionActiva()) {
-            Log.d("EJOC_DIAG", "Ignorado por tieneSesionActiva() == true")
-            return
-        }
+        if (ahoraMs < autorizadoHastaMillis) return
+        if (tieneSesionActiva()) return
 
         activarBloqueoPantalla()
     }
@@ -188,12 +177,26 @@ class OverlayService : Service() {
             return
         }
 
+        val metrics = resources.displayMetrics
+        val maxW = metrics.widthPixels.coerceAtLeast(1280)
+        val maxH = metrics.heightPixels.coerceAtLeast(720)
         val ctx = applicationContext
+
         Thread {
             val decodificado: Drawable? = try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     val source = ImageDecoder.createSource(ctx.resources, fondoResId)
-                    ImageDecoder.decodeDrawable(source).apply {
+                    ImageDecoder.decodeDrawable(source) { decoder, info, _ ->
+                        val w = info.size.width
+                        val h = info.size.height
+                        if (w > maxW || h > maxH) {
+                            val scale = minOf(maxW.toFloat() / w, maxH.toFloat() / h)
+                            decoder.setTargetSize(
+                                (w * scale).toInt().coerceAtLeast(1),
+                                (h * scale).toInt().coerceAtLeast(1)
+                            )
+                        }
+                    }.apply {
                         if (this is AnimatedImageDrawable) {
                             repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
                         }
@@ -210,24 +213,25 @@ class OverlayService : Service() {
                 preparandoFondo = false
                 if (decodificado != null) {
                     imgFondoBloqueo?.setImageDrawable(decodificado)
-                    if (bloqueoPantallaActivo && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && decodificado is AnimatedImageDrawable) {
-                        try {
-                            if (!decodificado.isRunning) decodificado.start()
-                        } catch (_: Exception) {
-                        }
+                    if (bloqueoPantallaActivo) {
+                        controlarAnimacion(true)
+                    } else {
+                        controlarAnimacion(false)
                     }
                 }
             }
         }.start()
     }
 
-    private fun asegurarAnimacionActiva() {
+    private fun controlarAnimacion(ejecutar: Boolean) {
         val d = imgFondoBloqueo?.drawable ?: fondoDrawable
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && d is AnimatedImageDrawable) {
             try {
                 d.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
-                if (!d.isRunning) {
-                    d.start()
+                if (ejecutar) {
+                    if (!d.isRunning) d.start()
+                } else {
+                    if (d.isRunning) d.stop()
                 }
             } catch (_: Exception) {
             }
@@ -239,25 +243,25 @@ class OverlayService : Service() {
         val bloqueoView = rootBloqueoView ?: return
         bloqueoPantallaActivo = true
 
-        if (fondoDrawable == null && !preparandoFondo) {
+        if (fondoDrawable != null) {
+            if (imgFondoBloqueo?.drawable !== fondoDrawable) {
+                imgFondoBloqueo?.setImageDrawable(fondoDrawable)
+            }
+        } else if (!preparandoFondo) {
             prepararGifUnaVez()
-        } else if (fondoDrawable != null && imgFondoBloqueo?.drawable == null) {
-            imgFondoBloqueo?.setImageDrawable(fondoDrawable)
         }
 
         bloqueoView.visibility = View.VISIBLE
         imgFondoBloqueo?.visibility = View.VISIBLE
         tarjetaOverlayView?.visibility = View.GONE
         silenciarAudioTv(true)
-        asegurarAnimacionActiva()
-
-        val deltaMs = System.currentTimeMillis() - ultimoScreenOnMs
-        Log.d("EJOC_DIAG", "activarBloqueoPantalla ejecutado (+${deltaMs}ms desde SCREEN_ON)")
+        controlarAnimacion(true)
     }
 
     private fun desactivarBloqueoPantalla() {
         if (!bloqueoPantallaActivo && !audioSilenciadoPorBloqueo) return
         bloqueoPantallaActivo = false
+        controlarAnimacion(false)
         silenciarAudioTv(false)
         rootBloqueoView?.visibility = View.GONE
     }
@@ -309,11 +313,6 @@ class OverlayService : Service() {
                     )
                     if (fondoDrawable != null) {
                         setImageDrawable(fondoDrawable)
-                    } else {
-                        val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
-                        if (fondoResId != 0) {
-                            setImageResource(fondoResId)
-                        }
                     }
                     visibility = View.VISIBLE
                 }
@@ -327,7 +326,7 @@ class OverlayService : Service() {
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                    PixelFormat.OPAQUE
+                    PixelFormat.TRANSLUCENT
                 ).apply {
                     gravity = Gravity.CENTER
                 }
@@ -353,18 +352,18 @@ class OverlayService : Service() {
                     orientation = LinearLayout.VERTICAL
                     background = fondo
                     setPadding(dp(18), dp(12), dp(20), dp(12))
-                    visibility = View.VISIBLE
+                    visibility = View.GONE
                 }
 
                 txtMensaje = TextView(ctx).apply {
-                    text = "✅ EjocOverlay conectado"
+                    text = ""
                     textSize = 14f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.parseColor("#38BDF8"))
                 }
 
                 txtReloj = TextView(ctx).apply {
-                    text = "Esperando tiempo..."
+                    text = ""
                     textSize = 22f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.WHITE)
@@ -387,13 +386,7 @@ class OverlayService : Service() {
                 }
 
                 windowManager.addView(tarjetaOverlayView, paramsEsquina)
-                diagnosticoHastaMillis = System.currentTimeMillis() + 6000L
-            } catch (e: Exception) {
-                Toast.makeText(
-                    applicationContext,
-                    "Error Overlay: ${e.message}",
-                    Toast.LENGTH_LONG
-                ).show()
+            } catch (_: Exception) {
                 tarjetaOverlayView = null
             }
         }
@@ -527,22 +520,19 @@ class OverlayService : Service() {
         if (bloqueoPantallaActivo) {
             rootBloqueoView?.visibility = View.VISIBLE
             tarjeta.visibility = View.GONE
-            asegurarAnimacionActiva()
+            controlarAnimacion(true)
             return
         }
 
-        // 4. Cartel inicial de diagnóstico (6 segundos al iniciar)
-        if (ahoraMs < diagnosticoHastaMillis) {
-            tarjeta.visibility = View.VISIBLE
-        } else {
-            tarjeta.visibility = View.GONE
-        }
+        tarjeta.visibility = View.GONE
     }
 
     override fun onDestroy() {
         try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
         silenciarAudioTv(false)
         handler.removeCallbacks(bucleVigilancia)
+        controlarAnimacion(false)
+        fondoDrawable = null
         rootBloqueoView?.let {
             try { windowManager.removeView(it) } catch (_: Exception) {}
         }
