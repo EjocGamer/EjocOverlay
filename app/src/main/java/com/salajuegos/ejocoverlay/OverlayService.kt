@@ -216,10 +216,10 @@ class OverlayService : Service() {
         bloqueoPantallaActivo = true
 
         // Base sólida oscura (~98-100%) para que no se transparente lo que hay detrás
-        bloqueoView.alpha = 0.95f
+        bloqueoView.alpha = 0.9f
         bloqueoView.setBackgroundColor(Color.parseColor("#FC030704"))
 
-        imgFondoBloqueo?.alpha = 0.95f
+        imgFondoBloqueo?.alpha = 0.9f
         imgFondoBloqueo?.visibility = View.VISIBLE
         imgLogoBloqueo?.visibility = View.GONE
         txtRelojBloqueo?.visibility = View.GONE
@@ -294,14 +294,22 @@ class OverlayService : Service() {
 
                 val fondoImg = ImageView(ctx).apply {
                     scaleType = ImageView.ScaleType.CENTER_CROP
-                    alpha = 0.95f
+                    alpha = 0.9f
                     layoutParams = FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT
                     )
-                    val drawableFondo = cargarDrawableFondoEjoc()
-                    if (drawableFondo != null) {
-                        setImageDrawable(drawableFondo)
+                    val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
+                    val inicial = cachedFondoDrawable ?: if (fondoResId != 0) {
+                        ContextCompat.getDrawable(ctx, fondoResId)
+                    } else {
+                        null
+                    }
+                    if (inicial != null) {
+                        setImageDrawable(inicial)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && inicial is AnimatedImageDrawable) {
+                            inicial.start()
+                        }
                     }
                     visibility = View.VISIBLE
                 }
