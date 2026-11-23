@@ -8,8 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.graphics.ImageDecoder
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.graphics.drawable.AnimatedImageDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.os.Build
@@ -25,6 +28,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import java.io.File
 
 class OverlayService : Service() {
@@ -158,24 +162,6 @@ class OverlayService : Service() {
         activarBloqueoPantalla()
     }
 
-    private fun activarBloqueoPantalla() {
-        intentarCrearVentanas()
-        val bloqueoView = rootBloqueoView ?: return
-        bloqueoPantallaActivo = true
-
-        val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
-        if (fondoResId != 0) {
-            imgFondoBloqueo?.setImageResource(fondoResId)
-            imgFondoBloqueo?.visibility = View.VISIBLE
-        }
-
-        imgLogoBloqueo?.visibility = View.GONE
-        txtRelojBloqueo?.visibility = View.GONE
-        bloqueoView.visibility = View.VISIBLE
-        tarjetaOverlayView?.visibility = View.GONE
-        silenciarAudioTv(true)
-    }
-
     private fun cargarDrawableFondoEjoc(): Drawable? {
         val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
         if (fondoResId == 0) return null
@@ -184,19 +170,19 @@ class OverlayService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val source = ImageDecoder.createSource(resources, fondoResId)
                 val drawable = ImageDecoder.decodeDrawable(source)
-                if (drawable is android.graphics.drawable.AnimatedImageDrawable) {
-                    drawable.repeatCount = android.graphics.drawable.AnimatedImageDrawable.REPEAT_INFINITE
+                if (drawable is AnimatedImageDrawable) {
+                    drawable.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
                     drawable.start()
                 }
                 drawable
             } else {
-                androidx.core.content.ContextCompat.getDrawable(this, fondoResId)
+                ContextCompat.getDrawable(this, fondoResId)
             }
         } catch (_: Exception) {
-            androidx.core.content.ContextCompat.getDrawable(this, fondoResId)
+            ContextCompat.getDrawable(this, fondoResId)
         }
     }
-    
+
     private fun activarBloqueoPantalla() {
         intentarCrearVentanas()
         val bloqueoView = rootBloqueoView ?: return
@@ -210,6 +196,9 @@ class OverlayService : Service() {
             imgFondoBloqueo?.setImageDrawable(drawableFondo)
             imgFondoBloqueo?.alpha = 0.95f
             imgFondoBloqueo?.visibility = View.VISIBLE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && drawableFondo is AnimatedImageDrawable) {
+                drawableFondo.start()
+            }
         }
 
         imgLogoBloqueo?.visibility = View.GONE
@@ -217,6 +206,27 @@ class OverlayService : Service() {
         bloqueoView.visibility = View.VISIBLE
         tarjetaOverlayView?.visibility = View.GONE
         silenciarAudioTv(true)
+    }
+
+    private fun desactivarBloqueoPantalla() {
+        if (!bloqueoPantallaActivo && !audioSilenciadoPorBloqueo) return
+        bloqueoPantallaActivo = false
+        silenciarAudioTv(false)
+        rootBloqueoView?.visibility = View.GONE
+    }
+
+    private fun silenciarAudioTv(silenciar: Boolean) {
+        try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            if (silenciar && !audioSilenciadoPorBloqueo) {
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
+                audioSilenciadoPorBloqueo = true
+            } else if (!silenciar && audioSilenciadoPorBloqueo) {
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
+                audioSilenciadoPorBloqueo = false
+            }
+        } catch (_: Exception) {
+        }
     }
 
     private fun intentarCrearVentanas() {
@@ -236,23 +246,24 @@ class OverlayService : Service() {
         val density = ctx.resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
 
-        // 1. Pantalla completa fija de bloqueo (solo imagen de fondo)
+        // 1. Pantalla completa fija de bloqueo (GIF animado con alta opacidad)
         if (rootBloqueoView == null) {
             try {
                 val frame = FrameLayout(ctx).apply {
-                    setBackgroundColor(Color.parseColor("#FF030704"))
+                    setBackgroundColor(Color.parseColor("#F2030704"))
                     visibility = View.GONE
                 }
 
                 val fondoImg = ImageView(ctx).apply {
                     scaleType = ImageView.ScaleType.CENTER_CROP
+                    alpha = 0.95f
                     layoutParams = FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT
                     )
-                    val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
-                    if (fondoResId != 0) {
-                        setImageResource(fondoResId)
+                    val drawableFondo = cargarDrawableFondoEjoc()
+                    if (drawableFondo != null) {
+                        setImageDrawable(drawableFondo)
                     }
                     visibility = View.VISIBLE
                 }
