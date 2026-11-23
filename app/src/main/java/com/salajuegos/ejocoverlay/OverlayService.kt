@@ -7,14 +7,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Color
-import android.graphics.ImageDecoder
 import android.graphics.PixelFormat
 import android.graphics.Typeface
-import android.graphics.drawable.BitmapDrawable
-import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.os.Build
@@ -25,6 +20,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -34,13 +30,14 @@ import java.io.File
 class OverlayService : Service() {
 
     private lateinit var windowManager: WindowManager
-    private var overlayView: LinearLayout? = null
+    private var rootBloqueoView: FrameLayout? = null
     private var imgFondoBloqueo: ImageView? = null
-    private var tarjetaBloqueo: LinearLayout? = null
-    private var imgLogo: ImageView? = null
+    private var imgLogoBloqueo: ImageView? = null
+    private var txtRelojBloqueo: TextView? = null
+
+    private var tarjetaOverlayView: LinearLayout? = null
     private var txtMensaje: TextView? = null
     private var txtReloj: TextView? = null
-    private var txtSubBloqueo: TextView? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private var ultimoFinRegistrado: Long = 0L
@@ -57,7 +54,6 @@ class OverlayService : Service() {
     private var bloqueoPantallaActivo: Boolean = false
     private var autorizadoHastaMillis: Long = 0L
     private var audioSilenciadoPorBloqueo: Boolean = false
-    private var ultimaRutaFondoCargada: String? = null
 
     private val DURACION_TIMER_MS = 5000L  // 5 segundos visible al agregar tiempo
     private val DURACION_LIBRE_MS = 10000L // 10 segundos visible al iniciar Tiempo Libre
@@ -80,13 +76,13 @@ class OverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         iniciarNotificacionServicio()
-        intentarCrearVentana()
+        intentarCrearVentanas()
         registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
         handler.post(bucleVigilancia)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        intentarCrearVentana()
+        intentarCrearVentanas()
 
         val accion = intent?.getStringExtra("accion")
         val valorTs = intent?.getLongExtra("ts", 0L) ?: 0L
@@ -162,163 +158,14 @@ class OverlayService : Service() {
         activarBloqueoPantalla()
     }
 
-    private fun buscarArchivoMedio(nombresBase: List<String>, extensiones: List<String>): File? {
-        val carpetas = listOf("/data/local/tmp", "/sdcard/Download")
-        for (carpeta in carpetas) {
-            for (nombre in nombresBase) {
-                for (ext in extensiones) {
-                    val f = File("$carpeta/$nombre.$ext")
-                    if (f.exists() && f.canRead() && f.length() > 0L) {
-                        return f
-                    }
-                }
-            }
-        }
-        return null
-    }
-
-    private fun cargarDrawableDesdeArchivo(archivo: File): Drawable? {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val source = ImageDecoder.createSource(archivo)
-                ImageDecoder.decodeDrawable(source)
-            } else {
-                val bitmap: Bitmap? = BitmapFactory.decodeFile(archivo.absolutePath)
-                bitmap?.let { BitmapDrawable(resources, it) }
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun aplicarFondoDinamicoBloqueo() {
-        val fondoView = imgFondoBloqueo ?: return
-        val archivoFondo = buscarArchivoMedio(
-            nombresBase = listOf("fondo_bloqueo", "fondo_ejoc", "fondo"),
-            extensiones = listOf("gif", "webp", "png", "jpg", "jpeg")
-        )
-
-        if (archivoFondo != null) {
-            val clave = "${archivoFondo.absolutePath}_${archivoFondo.lastModified()}"
-            if (clave != ultimaRutaFondoCargada) {
-                val drawable = cargarDrawableDesdeArchivo(archivoFondo)
-                if (drawable != null) {
-                    fondoView.setImageDrawable(drawable)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && drawable is android.graphics.drawable.AnimatedImageDrawable) {
-                        drawable.repeatCount = android.graphics.drawable.AnimatedImageDrawable.REPEAT_INFINITE
-                        drawable.start()
-                    }
-                    ultimaRutaFondoCargada = clave
-                }
-            }
-            fondoView.visibility = View.VISIBLE
-            overlayView?.background = Color.parseColor("#66050A07").let {
-                GradientDrawable().apply { setColor(it) }
-            }
-        } else {
-            ultimaRutaFondoCargada = null
-            fondoView.setImageDrawable(null)
-            fondoView.visibility = View.GONE
-            overlayView?.background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(
-                    Color.parseColor("#FF062414"),
-                    Color.parseColor("#FF07130D"),
-                    Color.parseColor("#FF040705")
-                )
-            )
-        }
-    }
-
-    private fun aplicarLogoDinamico() {
-        val logoView = imgLogo ?: return
-        val archivoLogo = buscarArchivoMedio(
-            nombresBase = listOf("logo_ejoc", "logo_bloqueo", "logo"),
-            extensiones = listOf("png", "webp", "jpg", "jpeg")
-        )
-
-        if (archivoLogo != null) {
-            val drawable = cargarDrawableDesdeArchivo(archivoLogo)
-            if (drawable != null) {
-                logoView.setImageDrawable(drawable)
-                logoView.visibility = View.VISIBLE
-                return
-            }
-        }
-
-        val logoResId = resources.getIdentifier("logo_ejoc", "drawable", packageName)
-        if (logoResId != 0) {
-            logoView.setImageResource(logoResId)
-            logoView.visibility = View.VISIBLE
-        } else {
-            logoView.visibility = View.GONE
-        }
-    }
-
     private fun activarBloqueoPantalla() {
-        intentarCrearVentana()
-        val view = overlayView ?: return
+        intentarCrearVentanas()
+        val bloqueoView = rootBloqueoView ?: return
         bloqueoPantallaActivo = true
 
-        val density = resources.displayMetrics.density
-        fun dp(v: Int) = (v * density).toInt()
-
-        view.gravity = Gravity.CENTER
-        view.setPadding(dp(32), dp(24), dp(32), dp(24))
-
-        aplicarFondoDinamicoBloqueo()
-        aplicarLogoDinamico()
-
-        tarjetaBloqueo?.apply {
-            background = null
-            setPadding(0, dp(12), 0, 0)
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
-
-        txtMensaje?.apply {
-            text = "EJOC GAME'S"
-            textSize = 22f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            visibility = if (imgLogo?.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-        }
-
-        txtReloj?.apply {
-            text = "00:00:00"
-            textSize = 34f
-            typeface = Typeface.MONOSPACE
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            setPadding(0, dp(8), 0, 0)
-            visibility = View.VISIBLE
-        }
-
-        txtSubBloqueo?.visibility = View.GONE
-
-        val tipoVentana = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
-
-        val paramsFull = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            tipoVentana,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.CENTER
-        }
-
-        try {
-            windowManager.updateViewLayout(view, paramsFull)
-        } catch (_: Exception) {
-        }
-        view.visibility = View.VISIBLE
+        txtRelojBloqueo?.text = "00:00:00"
+        bloqueoView.visibility = View.VISIBLE
+        tarjetaOverlayView?.visibility = View.GONE
         silenciarAudioTv(true)
     }
 
@@ -326,61 +173,7 @@ class OverlayService : Service() {
         if (!bloqueoPantallaActivo && !audioSilenciadoPorBloqueo) return
         bloqueoPantallaActivo = false
         silenciarAudioTv(false)
-
-        val view = overlayView ?: return
-        val density = resources.displayMetrics.density
-        fun dp(v: Int) = (v * density).toInt()
-
-        view.gravity = Gravity.START
-        view.setPadding(dp(18), dp(12), dp(20), dp(12))
-
-        imgFondoBloqueo?.visibility = View.GONE
-        imgLogo?.visibility = View.GONE
-        txtSubBloqueo?.visibility = View.GONE
-
-        tarjetaBloqueo?.apply {
-            background = null
-            setPadding(0, 0, 0, 0)
-            gravity = Gravity.START
-        }
-
-        txtMensaje?.apply {
-            textSize = 14f
-            gravity = Gravity.START
-            visibility = View.VISIBLE
-        }
-        txtReloj?.apply {
-            textSize = 26f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.START
-            setPadding(0, 0, 0, 0)
-        }
-
-        val tipoVentana = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
-
-        val paramsEsquina = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            tipoVentana,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            x = dp(32)
-            y = dp(32)
-        }
-
-        try {
-            windowManager.updateViewLayout(view, paramsEsquina)
-        } catch (_: Exception) {
-        }
-        view.visibility = View.GONE
+        rootBloqueoView?.visibility = View.GONE
     }
 
     private fun silenciarAudioTv(silenciar: Boolean) {
@@ -397,112 +190,167 @@ class OverlayService : Service() {
         }
     }
 
-    private fun intentarCrearVentana() {
-        if (overlayView != null) return
+    private fun intentarCrearVentanas() {
         if (!Settings.canDrawOverlays(this)) return
 
-        try {
-            val ctx = applicationContext
+        val tipoVentana = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        val ctx = applicationContext
+        if (!::windowManager.isInitialized) {
             windowManager = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            val density = ctx.resources.displayMetrics.density
-            fun dp(v: Int) = (v * density).toInt()
+        }
+        val density = ctx.resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
 
-            val fondo = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 14f * density
-                setColor(Color.parseColor("#F20F172A"))
-                setStroke((2f * density).toInt(), Color.parseColor("#38BDF8"))
-            }
-
-            overlayView = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                background = fondo
-                setPadding(dp(18), dp(12), dp(20), dp(12))
-                visibility = View.VISIBLE
-            }
-
-            imgFondoBloqueo = ImageView(ctx).apply {
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.MATCH_PARENT
-                )
-                visibility = View.GONE
-            }
-
-            imgLogo = ImageView(ctx).apply {
-                adjustViewBounds = true
-                scaleType = ImageView.ScaleType.FIT_CENTER
-                layoutParams = LinearLayout.LayoutParams(dp(340), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                    gravity = Gravity.CENTER_HORIZONTAL
-                    setMargins(0, 0, 0, dp(12))
+        // 1. Pantalla completa fija de bloqueo (fondo + logo + reloj centrados)
+        if (rootBloqueoView == null) {
+            try {
+                val frame = FrameLayout(ctx).apply {
+                    setBackgroundColor(Color.parseColor("#FF030704"))
+                    visibility = View.GONE
                 }
-                visibility = View.GONE
+
+                val fondoImg = ImageView(ctx).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    layoutParams = FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                    val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
+                    if (fondoResId != 0) {
+                        setImageResource(fondoResId)
+                    }
+                }
+                imgFondoBloqueo = fondoImg
+
+                val columnaCentro = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    layoutParams = FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                        Gravity.CENTER
+                    )
+                }
+
+                val logoImg = ImageView(ctx).apply {
+                    adjustViewBounds = true
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    layoutParams = LinearLayout.LayoutParams(dp(420), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        gravity = Gravity.CENTER_HORIZONTAL
+                    }
+                    val logoResId = resources.getIdentifier("logo_ejoc", "drawable", packageName)
+                    if (logoResId != 0) {
+                        setImageResource(logoResId)
+                    } else {
+                        visibility = View.GONE
+                    }
+                }
+                imgLogoBloqueo = logoImg
+
+                val relojBloqueo = TextView(ctx).apply {
+                    text = "00:00:00"
+                    textSize = 36f
+                    typeface = Typeface.MONOSPACE
+                    setTextColor(Color.WHITE)
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        gravity = Gravity.CENTER_HORIZONTAL
+                        setMargins(0, dp(10), 0, 0)
+                    }
+                }
+                txtRelojBloqueo = relojBloqueo
+
+                columnaCentro.addView(logoImg)
+                columnaCentro.addView(relojBloqueo)
+
+                frame.addView(fondoImg)
+                frame.addView(columnaCentro)
+
+                val paramsFull = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    tipoVentana,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = Gravity.CENTER
+                }
+
+                windowManager.addView(frame, paramsFull)
+                rootBloqueoView = frame
+            } catch (_: Exception) {
+                rootBloqueoView = null
             }
+        }
 
-            tarjetaBloqueo = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER_HORIZONTAL
+        // 2. Tarjeta compacta de avisos y tiempos en esquina superior derecha
+        if (tarjetaOverlayView == null) {
+            try {
+                val fondo = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = 14f * density
+                    setColor(Color.parseColor("#F20F172A"))
+                    setStroke((2f * density).toInt(), Color.parseColor("#38BDF8"))
+                }
+
+                tarjetaOverlayView = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = fondo
+                    setPadding(dp(18), dp(12), dp(20), dp(12))
+                    visibility = View.VISIBLE
+                }
+
+                txtMensaje = TextView(ctx).apply {
+                    text = "✅ EjocOverlay conectado"
+                    textSize = 14f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor("#38BDF8"))
+                }
+
+                txtReloj = TextView(ctx).apply {
+                    text = "Esperando tiempo..."
+                    textSize = 22f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                }
+
+                tarjetaOverlayView?.addView(txtMensaje)
+                tarjetaOverlayView?.addView(txtReloj)
+
+                val paramsEsquina = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    tipoVentana,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.END
+                    x = dp(32)
+                    y = dp(32)
+                }
+
+                windowManager.addView(tarjetaOverlayView, paramsEsquina)
+                diagnosticoHastaMillis = System.currentTimeMillis() + 6000L
+            } catch (e: Exception) {
+                android.widget.Toast.makeText(
+                    applicationContext,
+                    "Error Overlay: ${e.message}",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+                tarjetaOverlayView = null
             }
-
-            txtMensaje = TextView(ctx).apply {
-                text = "✅ EjocOverlay conectado"
-                textSize = 14f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor("#38BDF8"))
-            }
-
-            txtReloj = TextView(ctx).apply {
-                text = "Esperando tiempo..."
-                textSize = 22f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.WHITE)
-            }
-
-            txtSubBloqueo = TextView(ctx).apply {
-                text = ""
-                textSize = 18f
-                setTextColor(Color.parseColor("#94A3B8"))
-                visibility = View.GONE
-            }
-
-            tarjetaBloqueo?.addView(txtMensaje)
-            tarjetaBloqueo?.addView(txtReloj)
-            tarjetaBloqueo?.addView(txtSubBloqueo)
-
-            overlayView?.addView(imgFondoBloqueo)
-            overlayView?.addView(imgLogo)
-            overlayView?.addView(tarjetaBloqueo)
-
-            val tipoVentana = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE
-            }
-
-            val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                tipoVentana,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-                PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.TOP or Gravity.END
-                x = dp(32)
-                y = dp(32)
-            }
-
-            windowManager.addView(overlayView, params)
-            diagnosticoHastaMillis = System.currentTimeMillis() + 6000L
-        } catch (e: Exception) {
-            android.widget.Toast.makeText(
-                applicationContext,
-                "Error Overlay: ${e.message}",
-                android.widget.Toast.LENGTH_LONG
-            ).show()
-            overlayView = null
         }
     }
 
@@ -532,7 +380,7 @@ class OverlayService : Service() {
             setColor(Color.parseColor("#F20F172A"))
             setStroke((2f * density).toInt(), Color.parseColor(bordeHex))
         }
-        overlayView?.background = fondo
+        tarjetaOverlayView?.background = fondo
         txtMensaje?.setTextColor(Color.parseColor(colorTextoTitulo))
         txtReloj?.setTextColor(Color.parseColor(colorReloj))
     }
@@ -556,8 +404,8 @@ class OverlayService : Service() {
     }
 
     private fun verificarArchivosEstado() {
-        intentarCrearVentana()
-        val view = overlayView ?: return
+        intentarCrearVentanas()
+        val tarjeta = tarjetaOverlayView ?: return
         val ahoraSeg = System.currentTimeMillis() / 1000L
         val ahoraMs = System.currentTimeMillis()
 
@@ -581,79 +429,11 @@ class OverlayService : Service() {
             if (memModo == "ESPERA") {
                 txtMensaje?.text = "🛡️ Tiempo finalizado (En espera):"
                 actualizarEstiloCaja("#F59E0B", "#FCD34D", "#FFFFFF")
-                view.visibility = View.VISIBLE
+                tarjeta.visibility = View.VISIBLE
             } else {
                 if (inicioLibre != ultimoLibreRegistrado) {
                     ultimoLibreRegistrado = inicioLibre
                     ocultarEnMillis = ahoraMs + DURACION_LIBRE_MS
                 }
                 txtMensaje?.text = "⏱️ Tiempo libre activo:"
-                actualizarEstiloCaja("#38BDF8", "#7DD3FC", "#FFFFFF")
-                view.visibility = if (ahoraMs < ocultarEnMillis) View.VISIBLE else View.GONE
-            }
-            return
-        } else {
-            ultimoLibreRegistrado = 0L
-        }
-
-        // 2. Verificar Temporizador normal (5s al agregar + permanente en alerta 2 min)
-        var fin = leerTimestampLocal("sala_fin.txt")
-        if (fin == 0L && memModo == "TIMER") {
-            fin = memFin
-        }
-
-        val restante = (fin - ahoraSeg).toInt()
-        if (fin > 1700000000L && restante > 0) {
-            if (bloqueoPantallaActivo) desactivarBloqueoPantalla()
-            if (fin != ultimoFinRegistrado) {
-                ultimoFinRegistrado = fin
-                ocultarEnMillis = ahoraMs + DURACION_TIMER_MS
-            }
-
-            val h = restante / 3600
-            val m = (restante % 3600) / 60
-            val s = restante % 60
-
-            txtMensaje?.text = "⏳ El TV se apagará en:"
-            txtReloj?.text = String.format("%02d:%02d:%02d", h, m, s)
-            txtReloj?.textSize = 26f
-
-            if (restante <= 120) {
-                actualizarEstiloCaja("#EF4444", "#FCA5A5", "#FACC15")
-                view.visibility = View.VISIBLE
-            } else {
-                actualizarEstiloCaja("#22C55E", "#86EFAC", "#FFFFFF")
-                view.visibility = if (ahoraMs < ocultarEnMillis) View.VISIBLE else View.GONE
-            }
-            return
-        } else {
-            ultimoFinRegistrado = 0L
-        }
-
-        // 3. Mantener visible la pantalla de bloqueo si está activa
-        if (bloqueoPantallaActivo) {
-            aplicarFondoDinamicoBloqueo()
-            view.visibility = View.VISIBLE
-            return
-        }
-
-        // 4. Cartel inicial de diagnóstico (6 segundos al iniciar)
-        if (ahoraMs < diagnosticoHastaMillis) {
-            view.visibility = View.VISIBLE
-        } else {
-            view.visibility = View.GONE
-        }
-    }
-
-    override fun onDestroy() {
-        try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
-        silenciarAudioTv(false)
-        handler.removeCallbacks(bucleVigilancia)
-        overlayView?.let {
-            try { windowManager.removeView(it) } catch (_: Exception) {}
-        }
-        super.onDestroy()
-    }
-
-    override fun onBind(intent: Intent?): IBinder? = null
-}
+                actualizarEstiloCaja("#38BDF8", "#7DD3FC
