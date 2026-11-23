@@ -31,6 +31,7 @@ class OverlayService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var ultimoFinRegistrado: Long = 0L
+    private var ultimoLibreRegistrado: Long = 0L
     private var ocultarEnMillis: Long = 0L
     private var diagnosticoHastaMillis: Long = 0L
 
@@ -39,7 +40,8 @@ class OverlayService : Service() {
     private var memFin: Long = 0L
     private var memInicioLibre: Long = 0L
 
-    private val DURACION_VISIBLE_MS = 5000L
+    private val DURACION_TIMER_MS = 5000L  // 5 segundos visible al agregar tiempo
+    private val DURACION_LIBRE_MS = 10000L // 10 segundos visible al iniciar Tiempo Libre
 
     private val bucleVigilancia = object : Runnable {
         override fun run() {
@@ -66,21 +68,28 @@ class OverlayService : Service() {
                     memModo = "TIMER"
                     memFin = valorTs
                     memInicioLibre = 0L
+                    ultimoLibreRegistrado = 0L
                 }
                 "LIBRE" -> {
                     memModo = "LIBRE"
                     memInicioLibre = valorTs
                     memFin = 0L
+                    ultimoFinRegistrado = 0L
+                    ultimoLibreRegistrado = valorTs
+                    ocultarEnMillis = System.currentTimeMillis() + DURACION_LIBRE_MS
                 }
                 "ESPERA" -> {
                     memModo = "ESPERA"
                     memInicioLibre = valorTs
                     memFin = 0L
+                    ultimoFinRegistrado = 0L
                 }
                 "CLEAR" -> {
                     memModo = "NONE"
                     memFin = 0L
                     memInicioLibre = 0L
+                    ultimoFinRegistrado = 0L
+                    ultimoLibreRegistrado = 0L
                 }
             }
         }
@@ -146,7 +155,6 @@ class OverlayService : Service() {
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT
             ).apply {
-                // Ubicación arriba a la derecha
                 gravity = Gravity.TOP or Gravity.END
                 x = dp(32)
                 y = dp(32)
@@ -219,7 +227,7 @@ class OverlayService : Service() {
         val ahoraSeg = System.currentTimeMillis() / 1000L
         val ahoraMs = System.currentTimeMillis()
 
-        // 1. Verificar Tiempo Libre o Ventana de Espera
+        // 1. Verificar Tiempo Libre (10 segundos) o Ventana de Espera (Fijo)
         var inicioLibre = leerTimestampLocal("sala_libre.txt")
         if (inicioLibre == 0L && (memModo == "LIBRE" || memModo == "ESPERA")) {
             inicioLibre = memInicioLibre
@@ -238,16 +246,22 @@ class OverlayService : Service() {
             if (memModo == "ESPERA") {
                 txtMensaje?.text = "🛡️ Tiempo finalizado (En espera):"
                 actualizarEstiloCaja("#F59E0B", "#FCD34D", "#FFFFFF")
+                view.visibility = View.VISIBLE
             } else {
+                if (inicioLibre != ultimoLibreRegistrado) {
+                    ultimoLibreRegistrado = inicioLibre
+                    ocultarEnMillis = ahoraMs + DURACION_LIBRE_MS
+                }
                 txtMensaje?.text = "⏱️ Tiempo libre activo:"
                 actualizarEstiloCaja("#38BDF8", "#7DD3FC", "#FFFFFF")
+                view.visibility = if (ahoraMs < ocultarEnMillis) View.VISIBLE else View.GONE
             }
-
-            view.visibility = View.VISIBLE
             return
+        } else {
+            ultimoLibreRegistrado = 0L
         }
 
-        // 2. Verificar Temporizador normal
+        // 2. Verificar Temporizador normal (5s al agregar + permanente en alerta 2 min)
         var fin = leerTimestampLocal("sala_fin.txt")
         if (fin == 0L && memModo == "TIMER") {
             fin = memFin
@@ -257,7 +271,7 @@ class OverlayService : Service() {
         if (fin > 1700000000L && restante > 0) {
             if (fin != ultimoFinRegistrado) {
                 ultimoFinRegistrado = fin
-                ocultarEnMillis = ahoraMs + DURACION_VISIBLE_MS
+                ocultarEnMillis = ahoraMs + DURACION_TIMER_MS
             }
 
             val h = restante / 3600
