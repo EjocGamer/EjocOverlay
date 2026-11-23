@@ -20,6 +20,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -27,6 +28,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.io.File
@@ -47,6 +49,9 @@ class OverlayService : Service() {
     private var ocultarEnMillis: Long = 0L
     private var diagnosticoHastaMillis: Long = 0L
 
+    // Diagnóstico de encendido físico
+    private var ultimoScreenOnMs: Long = 0L
+
     // Estados en memoria: "TIMER", "LIBRE", "ESPERA", "NONE"
     private var memModo: String = "NONE"
     private var memFin: Long = 0L
@@ -66,16 +71,10 @@ class OverlayService : Service() {
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_SCREEN_ON) {
+                ultimoScreenOnMs = System.currentTimeMillis()
+                Log.d("EJOC_DIAG", "ACTION_SCREEN_ON recibido en t=$ultimoScreenOnMs")
+                Toast.makeText(applicationContext, "SCREEN_ON recibido", Toast.LENGTH_SHORT).show()
                 evaluarEncendidoFisico()
-                // Refuerzos escalonados por si el sistema/display del TV tarda en despertar el overlay
-                val delays = longArrayOf(250L, 700L, 1500L, 3000L)
-                for (d in delays) {
-                    handler.postDelayed({
-                        if (bloqueoPantallaActivo) {
-                            forzarVisibilidadBloqueo()
-                        }
-                    }, d)
-                }
             }
         }
     }
@@ -167,8 +166,14 @@ class OverlayService : Service() {
 
     private fun evaluarEncendidoFisico() {
         val ahoraMs = System.currentTimeMillis()
-        if (ahoraMs < autorizadoHastaMillis) return
-        if (tieneSesionActiva()) return
+        if (ahoraMs < autorizadoHastaMillis) {
+            Log.d("EJOC_DIAG", "Ignorado por autorizadoHastaMillis")
+            return
+        }
+        if (tieneSesionActiva()) {
+            Log.d("EJOC_DIAG", "Ignorado por tieneSesionActiva() == true")
+            return
+        }
 
         activarBloqueoPantalla()
     }
@@ -183,26 +188,12 @@ class OverlayService : Service() {
             return
         }
 
-        val metrics = resources.displayMetrics
-        val maxW = metrics.widthPixels.coerceAtLeast(1280)
-        val maxH = metrics.heightPixels.coerceAtLeast(720)
         val ctx = applicationContext
-
         Thread {
             val decodificado: Drawable? = try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     val source = ImageDecoder.createSource(ctx.resources, fondoResId)
-                    ImageDecoder.decodeDrawable(source) { decoder, info, _ ->
-                        val w = info.size.width
-                        val h = info.size.height
-                        if (w > maxW || h > maxH) {
-                            val scale = minOf(maxW.toFloat() / w, maxH.toFloat() / h)
-                            decoder.setTargetSize(
-                                (w * scale).toInt().coerceAtLeast(1),
-                                (h * scale).toInt().coerceAtLeast(1)
-                            )
-                        }
-                    }.apply {
+                    ImageDecoder.decodeDrawable(source).apply {
                         if (this is AnimatedImageDrawable) {
                             repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
                         }
@@ -243,9 +234,10 @@ class OverlayService : Service() {
         }
     }
 
-    private fun forzarVisibilidadBloqueo() {
+    private fun activarBloqueoPantalla() {
         intentarCrearVentanas()
         val bloqueoView = rootBloqueoView ?: return
+        bloqueoPantallaActivo = true
 
         if (fondoDrawable == null && !preparandoFondo) {
             prepararGifUnaVez()
@@ -253,31 +245,14 @@ class OverlayService : Service() {
             imgFondoBloqueo?.setImageDrawable(fondoDrawable)
         }
 
-        bloqueoView.setBackgroundColor(Color.BLACK)
-        bloqueoView.alpha = 1f
-        imgFondoBloqueo?.alpha = 1f
         bloqueoView.visibility = View.VISIBLE
         imgFondoBloqueo?.visibility = View.VISIBLE
-        bloqueoView.bringToFront()
         tarjetaOverlayView?.visibility = View.GONE
-
-        try {
-            val lp = bloqueoView.layoutParams as? WindowManager.LayoutParams
-            if (lp != null) {
-                windowManager.updateViewLayout(bloqueoView, lp)
-            }
-        } catch (_: Exception) {
-        }
-
-        asegurarAnimacionActiva()
-        imgFondoBloqueo?.invalidate()
-        bloqueoView.invalidate()
-    }
-
-    private fun activarBloqueoPantalla() {
-        bloqueoPantallaActivo = true
-        forzarVisibilidadBloqueo()
         silenciarAudioTv(true)
+        asegurarAnimacionActiva()
+
+        val deltaMs = System.currentTimeMillis() - ultimoScreenOnMs
+        Log.d("EJOC_DIAG", "activarBloqueoPantalla ejecutado (+${deltaMs}ms desde SCREEN_ON)")
     }
 
     private fun desactivarBloqueoPantalla() {
@@ -318,18 +293,16 @@ class OverlayService : Service() {
         val density = ctx.resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
 
-        // 1. Pantalla completa de bloqueo: GIF animado tal cual se envía
+        // 1. Pantalla completa de bloqueo
         if (rootBloqueoView == null) {
             try {
                 val frame = FrameLayout(ctx).apply {
                     setBackgroundColor(Color.BLACK)
-                    alpha = 1f
                     visibility = View.GONE
                 }
 
                 val fondoImg = ImageView(ctx).apply {
                     scaleType = ImageView.ScaleType.CENTER_CROP
-                    alpha = 1f
                     layoutParams = FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT
@@ -345,20 +318,15 @@ class OverlayService : Service() {
                     visibility = View.VISIBLE
                 }
                 imgFondoBloqueo = fondoImg
-
                 frame.addView(fondoImg)
-
-                @Suppress("DEPRECATION")
-                val flagsBloqueo = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                        WindowManager.LayoutParams.FLAG_FULLSCREEN
 
                 val paramsFull = WindowManager.LayoutParams(
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.MATCH_PARENT,
                     tipoVentana,
-                    flagsBloqueo,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                     PixelFormat.OPAQUE
                 ).apply {
                     gravity = Gravity.CENTER
@@ -421,10 +389,10 @@ class OverlayService : Service() {
                 windowManager.addView(tarjetaOverlayView, paramsEsquina)
                 diagnosticoHastaMillis = System.currentTimeMillis() + 6000L
             } catch (e: Exception) {
-                android.widget.Toast.makeText(
+                Toast.makeText(
                     applicationContext,
                     "Error Overlay: ${e.message}",
-                    android.widget.Toast.LENGTH_LONG
+                    Toast.LENGTH_LONG
                 ).show()
                 tarjetaOverlayView = null
             }
