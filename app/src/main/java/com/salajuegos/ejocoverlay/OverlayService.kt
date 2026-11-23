@@ -95,14 +95,14 @@ class OverlayService : Service() {
         if (accion != null) {
             when (accion) {
                 "TIMER" -> {
-                    desactivarBloqueoPantalla()
+                    des
                     memModo = "TIMER"
                     memFin = valorTs
                     memInicioLibre = 0L
                     ultimoLibreRegistrado = 0L
                 }
                 "LIBRE" -> {
-                    desactivarBloqueoPantalla()
+                    des
                     memModo = "LIBRE"
                     memInicioLibre = valorTs
                     memFin = 0L
@@ -111,7 +111,7 @@ class OverlayService : Service() {
                     ocultarEnMillis = System.currentTimeMillis() + DURACION_LIBRE_MS
                 }
                 "ESPERA" -> {
-                    desactivarBloqueoPantalla()
+                    des
                     memModo = "ESPERA"
                     memInicioLibre = valorTs
                     memFin = 0L
@@ -120,10 +120,10 @@ class OverlayService : Service() {
                 "PERMITIR" -> {
                     // Ventana de gracia de 20s al encender el TV desde la app del celular
                     autorizadoHastaMillis = System.currentTimeMillis() + 20000L
-                    desactivarBloqueoPantalla()
+                    des
                 }
                 "CLEAR" -> {
-                    desactivarBloqueoPantalla()
+                    des
                     memModo = "NONE"
                     memFin = 0L
                     memInicioLibre = 0L
@@ -245,9 +245,12 @@ class OverlayService : Service() {
             imgFondoBloqueo?.setImageDrawable(fondoDrawable)
         }
 
+        bloqueoView.setBackgroundColor(Color.BLACK)
+        bloqueoView.alpha = 1f
         imgFondoBloqueo?.alpha = 1f
         bloqueoView.visibility = View.VISIBLE
         imgFondoBloqueo?.visibility = View.VISIBLE
+        bloqueoView.bringToFront()
         tarjetaOverlayView?.visibility = View.GONE
         silenciarAudioTv(true)
 
@@ -302,6 +305,7 @@ class OverlayService : Service() {
             try {
                 val frame = FrameLayout(ctx).apply {
                     setBackgroundColor(Color.BLACK)
+                    alpha = 1f
                     visibility = View.GONE
                 }
 
