@@ -62,6 +62,9 @@ class OverlayService : Service() {
     private val DURACION_TIMER_MS = 5000L  // 5 segundos visible al agregar tiempo
     private val DURACION_LIBRE_MS = 10000L // 10 segundos visible al iniciar Tiempo Libre
 
+    private var cachedFondoDrawable: Drawable? = null
+    @Volatile private var cargandoFondo: Boolean = false
+
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_SCREEN_ON) {
@@ -80,6 +83,7 @@ class OverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         iniciarNotificacionServicio()
+        precargarFondoEnSegundoPlano()
         intentarCrearVentanas()
         registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
         handler.post(bucleVigilancia)
@@ -162,25 +166,48 @@ class OverlayService : Service() {
         activarBloqueoPantalla()
     }
 
-    private fun cargarDrawableFondoEjoc(): Drawable? {
-        val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
-        if (fondoResId == 0) return null
-
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val source = ImageDecoder.createSource(resources, fondoResId)
-                val drawable = ImageDecoder.decodeDrawable(source)
-                if (drawable is AnimatedImageDrawable) {
-                    drawable.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
-                    drawable.start()
-                }
-                drawable
-            } else {
-                ContextCompat.getDrawable(this, fondoResId)
-            }
-        } catch (_: Exception) {
-            ContextCompat.getDrawable(this, fondoResId)
+    private fun precargarFondoEnSegundoPlano(onListo: (() -> Unit)? = null) {
+        if (cachedFondoDrawable != null) {
+            onListo?.invoke()
+            return
         }
+        if (cargandoFondo) return
+        cargandoFondo = true
+
+        val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
+        if (fondoResId == 0) {
+            cargandoFondo = false
+            return
+        }
+
+        Thread {
+            val decodificado: Drawable? = try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    val source = ImageDecoder.createSource(resources, fondoResId)
+                    ImageDecoder.decodeDrawable(source).apply {
+                        if (this is AnimatedImageDrawable) {
+                            repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+                        }
+                    }
+                } else {
+                    ContextCompat.getDrawable(applicationContext, fondoResId)
+                }
+            } catch (_: Exception) {
+                ContextCompat.getDrawable(applicationContext, fondoResId)
+            }
+
+            handler.post {
+                cachedFondoDrawable = decodificado
+                cargandoFondo = false
+                if (decodificado != null && imgFondoBloqueo != null) {
+                    imgFondoBloqueo?.setImageDrawable(decodificado)
+                    if (bloqueoPantallaActivo && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && decodificado is AnimatedImageDrawable) {
+                        decodificado.start()
+                    }
+                }
+                onListo?.invoke()
+            }
+        }.start()
     }
 
     private fun activarBloqueoPantalla() {
@@ -188,21 +215,32 @@ class OverlayService : Service() {
         val bloqueoView = rootBloqueoView ?: return
         bloqueoPantallaActivo = true
 
-        // Fondo base casi opaco (95%) para tapar bien lo que haya detrás
-        bloqueoView.setBackgroundColor(Color.parseColor("#F2030704"))
+        // Base sólida oscura (~98-100%) para que no se transparente lo que hay detrás
+        bloqueoView.alpha = 0.95f
+        bloqueoView.setBackgroundColor(Color.parseColor("#FC030704"))
 
-        val drawableFondo = cargarDrawableFondoEjoc()
-        if (drawableFondo != null) {
-            imgFondoBloqueo?.setImageDrawable(drawableFondo)
-            imgFondoBloqueo?.alpha = 0.95f
-            imgFondoBloqueo?.visibility = View.VISIBLE
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && drawableFondo is AnimatedImageDrawable) {
-                drawableFondo.start()
-            }
-        }
-
+        imgFondoBloqueo?.alpha = 0.95f
+        imgFondoBloqueo?.visibility = View.VISIBLE
         imgLogoBloqueo?.visibility = View.GONE
         txtRelojBloqueo?.visibility = View.GONE
+
+        val drawable = cachedFondoDrawable
+        if (drawable != null) {
+            imgFondoBloqueo?.setImageDrawable(drawable)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && drawable is AnimatedImageDrawable) {
+                drawable.stop()
+                drawable.start()
+            }
+        } else {
+            // Respaldo inmediato mientras termina la precarga si aún no estaba listo
+            val fondoResId = resources.getIdentifier("fondo_ejoc", "drawable", packageName)
+            if (fondoResId != 0 && imgFondoBloqueo?.drawable == null) {
+                imgFondoBloqueo?.setImageResource(fondoResId)
+            }
+            precargarFondoEnSegundoPlano()
+        }
+
+        // Mostrar al instante sin esperar decodificación
         bloqueoView.visibility = View.VISIBLE
         tarjetaOverlayView?.visibility = View.GONE
         silenciarAudioTv(true)
@@ -250,7 +288,7 @@ class OverlayService : Service() {
         if (rootBloqueoView == null) {
             try {
                 val frame = FrameLayout(ctx).apply {
-                    setBackgroundColor(Color.parseColor("#F2030704"))
+                    setBackgroundColor(Color.parseColor("#FC030704"))
                     visibility = View.GONE
                 }
 
