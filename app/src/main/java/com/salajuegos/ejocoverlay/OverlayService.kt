@@ -131,6 +131,7 @@ class OverlayService : Service() {
                     ultimoLibreRegistrado = 0L
                 }
             }
+        }
 
         handler.removeCallbacks(bucleVigilancia)
         handler.post(bucleVigilancia)
