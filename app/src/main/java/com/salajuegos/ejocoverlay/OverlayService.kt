@@ -95,14 +95,14 @@ class OverlayService : Service() {
         if (accion != null) {
             when (accion) {
                 "TIMER" -> {
-                    des
+                    desactivarBloqueoPantalla()
                     memModo = "TIMER"
                     memFin = valorTs
                     memInicioLibre = 0L
                     ultimoLibreRegistrado = 0L
                 }
                 "LIBRE" -> {
-                    des
+                    desactivarBloqueoPantalla()
                     memModo = "LIBRE"
                     memInicioLibre = valorTs
                     memFin = 0L
@@ -111,7 +111,7 @@ class OverlayService : Service() {
                     ocultarEnMillis = System.currentTimeMillis() + DURACION_LIBRE_MS
                 }
                 "ESPERA" -> {
-                    des
+                    desactivarBloqueoPantalla()
                     memModo = "ESPERA"
                     memInicioLibre = valorTs
                     memFin = 0L
@@ -120,10 +120,10 @@ class OverlayService : Service() {
                 "PERMITIR" -> {
                     // Ventana de gracia de 20s al encender el TV desde la app del celular
                     autorizadoHastaMillis = System.currentTimeMillis() + 20000L
-                    des
+                    desactivarBloqueoPantalla()
                 }
                 "CLEAR" -> {
-                    des
+                    desactivarBloqueoPantalla()
                     memModo = "NONE"
                     memFin = 0L
                     memInicioLibre = 0L
@@ -131,7 +131,6 @@ class OverlayService : Service() {
                     ultimoLibreRegistrado = 0L
                 }
             }
-        }
 
         handler.removeCallbacks(bucleVigilancia)
         handler.post(bucleVigilancia)
