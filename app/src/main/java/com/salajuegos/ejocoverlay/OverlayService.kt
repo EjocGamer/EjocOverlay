@@ -67,6 +67,15 @@ class OverlayService : Service() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_SCREEN_ON) {
                 evaluarEncendidoFisico()
+                // Refuerzos escalonados por si el sistema/display del TV tarda en despertar el overlay
+                val delays = longArrayOf(250L, 700L, 1500L, 3000L)
+                for (d in delays) {
+                    handler.postDelayed({
+                        if (bloqueoPantallaActivo) {
+                            forzarVisibilidadBloqueo()
+                        }
+                    }, d)
+                }
             }
         }
     }
@@ -234,10 +243,9 @@ class OverlayService : Service() {
         }
     }
 
-    private fun activarBloqueoPantalla() {
+    private fun forzarVisibilidadBloqueo() {
         intentarCrearVentanas()
         val bloqueoView = rootBloqueoView ?: return
-        bloqueoPantallaActivo = true
 
         if (fondoDrawable == null && !preparandoFondo) {
             prepararGifUnaVez()
@@ -252,14 +260,24 @@ class OverlayService : Service() {
         imgFondoBloqueo?.visibility = View.VISIBLE
         bloqueoView.bringToFront()
         tarjetaOverlayView?.visibility = View.GONE
-        silenciarAudioTv(true)
 
-        imgFondoBloqueo?.post {
-            if (bloqueoPantallaActivo) {
-                asegurarAnimacionActiva()
-                imgFondoBloqueo?.invalidate()
+        try {
+            val lp = bloqueoView.layoutParams as? WindowManager.LayoutParams
+            if (lp != null) {
+                windowManager.updateViewLayout(bloqueoView, lp)
             }
+        } catch (_: Exception) {
         }
+
+        asegurarAnimacionActiva()
+        imgFondoBloqueo?.invalidate()
+        bloqueoView.invalidate()
+    }
+
+    private fun activarBloqueoPantalla() {
+        bloqueoPantallaActivo = true
+        forzarVisibilidadBloqueo()
+        silenciarAudioTv(true)
     }
 
     private fun desactivarBloqueoPantalla() {
@@ -330,13 +348,17 @@ class OverlayService : Service() {
 
                 frame.addView(fondoImg)
 
+                @Suppress("DEPRECATION")
+                val flagsBloqueo = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_FULLSCREEN
+
                 val paramsFull = WindowManager.LayoutParams(
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.MATCH_PARENT,
                     tipoVentana,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    flagsBloqueo,
                     PixelFormat.OPAQUE
                 ).apply {
                     gravity = Gravity.CENTER
