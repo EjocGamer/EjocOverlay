@@ -45,6 +45,7 @@ class OverlayService : Service() {
     private var ultimoFinRegistrado: Long = 0L
     private var ultimoLibreRegistrado: Long = 0L
     private var ocultarEnMillis: Long = 0L
+    private var diagnosticoHastaMillis: Long = 0L
 
     // Estados en memoria: "TIMER", "LIBRE", "ESPERA", "NONE"
     private var memModo: String = "NONE"
@@ -352,18 +353,18 @@ class OverlayService : Service() {
                     orientation = LinearLayout.VERTICAL
                     background = fondo
                     setPadding(dp(18), dp(12), dp(20), dp(12))
-                    visibility = View.GONE
+                    visibility = View.VISIBLE
                 }
 
                 txtMensaje = TextView(ctx).apply {
-                    text = ""
+                    text = "✅ EjocOverlay conectado"
                     textSize = 14f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.parseColor("#38BDF8"))
                 }
 
                 txtReloj = TextView(ctx).apply {
-                    text = ""
+                    text = "Esperando tiempo..."
                     textSize = 22f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.WHITE)
@@ -386,6 +387,7 @@ class OverlayService : Service() {
                 }
 
                 windowManager.addView(tarjetaOverlayView, paramsEsquina)
+                diagnosticoHastaMillis = System.currentTimeMillis() + 6000L
             } catch (_: Exception) {
                 tarjetaOverlayView = null
             }
@@ -524,7 +526,12 @@ class OverlayService : Service() {
             return
         }
 
-        tarjeta.visibility = View.GONE
+        // 4. Cartel inicial de conexión (6 segundos al iniciar)
+        if (ahoraMs < diagnosticoHastaMillis) {
+            tarjeta.visibility = View.VISIBLE
+        } else {
+            tarjeta.visibility = View.GONE
+        }
     }
 
     override fun onDestroy() {
