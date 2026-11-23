@@ -91,34 +91,35 @@ class OverlayService : Service() {
         if (!Settings.canDrawOverlays(this)) return
 
         try {
-            windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            val density = resources.displayMetrics.density
+            val ctx = applicationContext
+            windowManager = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val density = ctx.resources.displayMetrics.density
             fun dp(v: Int) = (v * density).toInt()
 
             val fondo = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = 14f * density
-                setColor(Color.parseColor("#E60F172A"))
+                setColor(Color.parseColor("#F20F172A"))
                 setStroke((2f * density).toInt(), Color.parseColor("#38BDF8"))
             }
 
-            overlayView = LinearLayout(this).apply {
+            overlayView = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
                 background = fondo
-                setPadding(dp(16), dp(10), dp(18), dp(10))
+                setPadding(dp(18), dp(12), dp(20), dp(12))
                 visibility = View.VISIBLE
             }
 
-            txtMensaje = TextView(this).apply {
+            txtMensaje = TextView(ctx).apply {
                 text = "✅ EjocOverlay conectado"
                 textSize = 14f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.parseColor("#38BDF8"))
             }
 
-            txtReloj = TextView(this).apply {
+            txtReloj = TextView(ctx).apply {
                 text = "Esperando tiempo..."
-                textSize = 20f
+                textSize = 22f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             }
@@ -138,19 +139,22 @@ class OverlayService : Service() {
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 tipoVentana,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
-                x = dp(24)
-                y = dp(24)
+                x = dp(32)
+                y = dp(32)
             }
 
             windowManager.addView(overlayView, params)
-            // Mostrar cartel de confirmación inicial durante 6 segundos
             diagnosticoHastaMillis = System.currentTimeMillis() + 6000L
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(
+                applicationContext,
+                "Error Overlay: ${e.message}",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
             overlayView = null
         }
     }
