@@ -34,8 +34,8 @@ class OverlayService : Service() {
     private var ocultarEnMillis: Long = 0L
     private var diagnosticoHastaMillis: Long = 0L
 
-    // Respaldo en memoria recibido directamente por Intent desde el celular
-    private var memModo: String = "NONE" // "TIMER", "LIBRE", "NONE"
+    // Estados en memoria: "TIMER", "LIBRE", "ESPERA", "NONE"
+    private var memModo: String = "NONE"
     private var memFin: Long = 0L
     private var memInicioLibre: Long = 0L
 
@@ -58,7 +58,6 @@ class OverlayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intentarCrearVentana()
 
-        // Leer extras si el celular los envió en el comando am startservice
         val accion = intent?.getStringExtra("accion")
         val valorTs = intent?.getLongExtra("ts", 0L) ?: 0L
         if (accion != null) {
@@ -70,6 +69,11 @@ class OverlayService : Service() {
                 }
                 "LIBRE" -> {
                     memModo = "LIBRE"
+                    memInicioLibre = valorTs
+                    memFin = 0L
+                }
+                "ESPERA" -> {
+                    memModo = "ESPERA"
                     memInicioLibre = valorTs
                     memFin = 0L
                 }
@@ -142,7 +146,8 @@ class OverlayService : Service() {
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT
             ).apply {
-                gravity = Gravity.TOP or Gravity.START
+                // Ubicación arriba a la derecha
+                gravity = Gravity.TOP or Gravity.END
                 x = dp(32)
                 y = dp(32)
             }
@@ -182,7 +187,7 @@ class OverlayService : Service() {
         val fondo = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = 14f * density
-            setColor(Color.parseColor("#E60F172A"))
+            setColor(Color.parseColor("#F20F172A"))
             setStroke((2f * density).toInt(), Color.parseColor(bordeHex))
         }
         overlayView?.background = fondo
@@ -214,9 +219,9 @@ class OverlayService : Service() {
         val ahoraSeg = System.currentTimeMillis() / 1000L
         val ahoraMs = System.currentTimeMillis()
 
-        // 1. Verificar Tiempo Libre (archivo o memoria)
+        // 1. Verificar Tiempo Libre o Ventana de Espera
         var inicioLibre = leerTimestampLocal("sala_libre.txt")
-        if (inicioLibre == 0L && memModo == "LIBRE") {
+        if (inicioLibre == 0L && (memModo == "LIBRE" || memModo == "ESPERA")) {
             inicioLibre = memInicioLibre
         }
 
@@ -227,15 +232,22 @@ class OverlayService : Service() {
             val m = (transcurrido % 3600) / 60
             val s = transcurrido % 60
 
-            txtMensaje?.text = "⏱️ Tiempo libre / adicional:"
             txtReloj?.text = String.format("%02d:%02d:%02d", h, m, s)
             txtReloj?.textSize = 26f
-            actualizarEstiloCaja("#38BDF8", "#7DD3FC", "#FFFFFF")
+
+            if (memModo == "ESPERA") {
+                txtMensaje?.text = "🛡️ Tiempo finalizado (En espera):"
+                actualizarEstiloCaja("#F59E0B", "#FCD34D", "#FFFFFF")
+            } else {
+                txtMensaje?.text = "⏱️ Tiempo libre activo:"
+                actualizarEstiloCaja("#38BDF8", "#7DD3FC", "#FFFFFF")
+            }
+
             view.visibility = View.VISIBLE
             return
         }
 
-        // 2. Verificar Temporizador (archivo o memoria)
+        // 2. Verificar Temporizador normal
         var fin = leerTimestampLocal("sala_fin.txt")
         if (fin == 0L && memModo == "TIMER") {
             fin = memFin
@@ -268,7 +280,7 @@ class OverlayService : Service() {
             ultimoFinRegistrado = 0L
         }
 
-        // 3. Mostrar confirmación inicial durante 6s al arrancar el servicio
+        // 3. Cartel inicial de diagnóstico (6 segundos al iniciar)
         if (ahoraMs < diagnosticoHastaMillis) {
             view.visibility = View.VISIBLE
         } else {
