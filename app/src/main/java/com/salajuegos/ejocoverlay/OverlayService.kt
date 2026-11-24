@@ -52,14 +52,24 @@ class OverlayService : Service() {
     private var memFin: Long = 0L
     private var memInicioLibre: Long = 0L
 
+    // Caché de lectura de archivos para evitar I/O en cada segundo
+    private var ultimaLecturaDiscoMs: Long = 0L
+    private var cacheLibreDisco: Long = 0L
+    private var cacheFinDisco: Long = 0L
+
+    // Caché de estilo visual para no recrear GradientDrawable en cada tick
+    private var estiloActual: String = "INICIAL"
+
     // Control de bloqueo por encendido físico sin tiempo
     private var bloqueoPantallaActivo: Boolean = false
     private var autorizadoHastaMillis: Long = 0L
     private var audioSilenciadoPorBloqueo: Boolean = false
 
-    private val DURACION_TIMER_MS = 5000L   // 5 segundos visible al agregar tiempo
-    private val DURACION_LIBRE_MS = 10000L  // 10 segundos visible al iniciar Tiempo Libre
-    private val INTERVALO_VIGILANCIA_MS = 2000L // 2 segundos para reducir carga continua en TV
+    private val DURACION_TIMER_MS = 5000L
+    private val DURACION_LIBRE_MS = 10000L
+    private val INTERVALO_VISIBLE_MS = 1000L  // 1s fluido cuando la tarjeta se ve
+    private val INTERVALO_OCULTO_MS = 3000L   // 3s en reposo/oculto para ahorrar CPU
+    private val INTERVALO_DISCO_MS = 5000L    // Leer archivos solo cada 5s
 
     private var fondoDrawable: Drawable? = null
     @Volatile private var preparandoFondo: Boolean = false
@@ -74,8 +84,9 @@ class OverlayService : Service() {
 
     private val bucleVigilancia = object : Runnable {
         override fun run() {
-            verificarArchivosEstado()
-            handler.postDelayed(this, INTERVALO_VIGILANCIA_MS)
+            val tarjetaVisible = verificarArchivosEstado()
+            val proximoIntervalo = if (tarjetaVisible) INTERVALO_VISIBLE_MS else INTERVALO_OCULTO_MS
+            handler.postDelayed(this, proximoIntervalo)
         }
     }
 
@@ -97,6 +108,8 @@ class OverlayService : Service() {
         val accion = intent?.getStringExtra("accion")
         val valorTs = intent?.getLongExtra("ts", 0L) ?: 0L
         if (accion != null) {
+            // Forzar lectura fresca de disco si llega un comando externo
+            ultimaLecturaDiscoMs = 0L
             when (accion) {
                 "TIMER" -> {
                     desactivarBloqueoPantalla()
@@ -122,7 +135,6 @@ class OverlayService : Service() {
                     ultimoFinRegistrado = 0L
                 }
                 "PERMITIR" -> {
-                    // Ventana de gracia de 20s al encender el TV desde la app del celular
                     autorizadoHastaMillis = System.currentTimeMillis() + 20000L
                     desactivarBloqueoPantalla()
                 }
@@ -133,6 +145,8 @@ class OverlayService : Service() {
                     memInicioLibre = 0L
                     ultimoFinRegistrado = 0L
                     ultimoLibreRegistrado = 0L
+                    cacheLibreDisco = 0L
+                    cacheFinDisco = 0L
                 }
             }
         }
@@ -214,11 +228,7 @@ class OverlayService : Service() {
                 preparandoFondo = false
                 if (decodificado != null) {
                     imgFondoBloqueo?.setImageDrawable(decodificado)
-                    if (bloqueoPantallaActivo) {
-                        controlarAnimacion(true)
-                    } else {
-                        controlarAnimacion(false)
-                    }
+                    controlarAnimacion(bloqueoPantallaActivo)
                 }
             }
         }.start()
@@ -282,6 +292,7 @@ class OverlayService : Service() {
     }
 
     private fun intentarCrearVentanas() {
+        if (rootBloqueoView != null && tarjetaOverlayView != null) return
         if (!Settings.canDrawOverlays(this)) return
 
         val tipoVentana = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -387,6 +398,7 @@ class OverlayService : Service() {
                 }
 
                 windowManager.addView(tarjetaOverlayView, paramsEsquina)
+                estiloActual = "INICIAL"
                 diagnosticoHastaMillis = System.currentTimeMillis() + 6000L
             } catch (_: Exception) {
                 tarjetaOverlayView = null
@@ -412,7 +424,10 @@ class OverlayService : Service() {
         startForeground(301, notif)
     }
 
-    private fun actualizarEstiloCaja(bordeHex: String, colorTextoTitulo: String, colorReloj: String) {
+    private fun actualizarEstiloCaja(claveEstilo: String, bordeHex: String, colorTextoTitulo: String, colorReloj: String) {
+        if (estiloActual == claveEstilo) return
+        estiloActual = claveEstilo
+
         val density = resources.displayMetrics.density
         val fondo = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
@@ -443,21 +458,47 @@ class OverlayService : Service() {
         return 0L
     }
 
-    private fun verificarArchivosEstado() {
+    /**
+     * Devuelve true si la tarjeta está visible (para refrescar cada 1s)
+     * o false si está oculta (para descansar el bucle a 3s).
+     */
+    private fun verificarArchivosEstado(): Boolean {
         intentarCrearVentanas()
-        val tarjeta = tarjetaOverlayView ?: return
-        val ahoraSeg = System.currentTimeMillis() / 1000L
+        val tarjeta = tarjetaOverlayView ?: return false
         val ahoraMs = System.currentTimeMillis()
+        val ahoraSeg = ahoraMs / 1000L
+
+        if (ahoraMs - ultimaLecturaDiscoMs >= INTERVALO_DISCO_MS) {
+            cacheLibreDisco = leerTimestampLocal("sala_libre.txt")
+            cacheFinDisco = leerTimestampLocal("sala_fin.txt")
+            ultimaLecturaDiscoMs = ahoraMs
+        }
 
         // 1. Verificar Tiempo Libre (10 segundos) o Ventana de Espera (Fijo)
-        var inicioLibre = leerTimestampLocal("sala_libre.txt")
-        if (inicioLibre == 0L && (memModo == "LIBRE" || memModo == "ESPERA")) {
-            inicioLibre = memInicioLibre
+        val inicioLibre = if (cacheLibreDisco > 0L) {
+            cacheLibreDisco
+        } else if (memModo == "LIBRE" || memModo == "ESPERA") {
+            memInicioLibre
+        } else {
+            0L
         }
 
         if (inicioLibre > 1700000000L && ahoraSeg >= inicioLibre) {
             if (bloqueoPantallaActivo) desactivarBloqueoPantalla()
             ultimoFinRegistrado = 0L
+
+            val esEspera = (memModo == "ESPERA")
+            if (!esEspera && inicioLibre != ultimoLibreRegistrado) {
+                ultimoLibreRegistrado = inicioLibre
+                ocultarEnMillis = ahoraMs + DURACION_LIBRE_MS
+            }
+
+            val debeMostrar = esEspera || (ahoraMs < ocultarEnMillis)
+            if (!debeMostrar) {
+                if (tarjeta.visibility != View.GONE) tarjeta.visibility = View.GONE
+                return false
+            }
+
             val transcurrido = (ahoraSeg - inicioLibre).toInt()
             val h = transcurrido / 3600
             val m = (transcurrido % 3600) / 60
@@ -466,28 +507,27 @@ class OverlayService : Service() {
             txtReloj?.text = String.format("%02d:%02d:%02d", h, m, s)
             txtReloj?.textSize = 26f
 
-            if (memModo == "ESPERA") {
+            if (esEspera) {
                 txtMensaje?.text = "🛡️ Tiempo finalizado (En espera):"
-                actualizarEstiloCaja("#F59E0B", "#FCD34D", "#FFFFFF")
-                tarjeta.visibility = View.VISIBLE
+                actualizarEstiloCaja("ESPERA", "#F59E0B", "#FCD34D", "#FFFFFF")
             } else {
-                if (inicioLibre != ultimoLibreRegistrado) {
-                    ultimoLibreRegistrado = inicioLibre
-                    ocultarEnMillis = ahoraMs + DURACION_LIBRE_MS
-                }
                 txtMensaje?.text = "⏱️ Tiempo libre activo:"
-                actualizarEstiloCaja("#38BDF8", "#7DD3FC", "#FFFFFF")
-                tarjeta.visibility = if (ahoraMs < ocultarEnMillis) View.VISIBLE else View.GONE
+                actualizarEstiloCaja("LIBRE", "#38BDF8", "#7DD3FC", "#FFFFFF")
             }
-            return
+
+            if (tarjeta.visibility != View.VISIBLE) tarjeta.visibility = View.VISIBLE
+            return true
         } else {
             ultimoLibreRegistrado = 0L
         }
 
         // 2. Verificar Temporizador normal (5s al agregar + permanente en alerta 2 min)
-        var fin = leerTimestampLocal("sala_fin.txt")
-        if (fin == 0L && memModo == "TIMER") {
-            fin = memFin
+        val fin = if (cacheFinDisco > 0L) {
+            cacheFinDisco
+        } else if (memModo == "TIMER") {
+            memFin
+        } else {
+            0L
         }
 
         val restante = (fin - ahoraSeg).toInt()
@@ -498,6 +538,13 @@ class OverlayService : Service() {
                 ocultarEnMillis = ahoraMs + DURACION_TIMER_MS
             }
 
+            val esAlerta = restante <= 120
+            val debeMostrar = esAlerta || (ahoraMs < ocultarEnMillis)
+            if (!debeMostrar) {
+                if (tarjeta.visibility != View.GONE) tarjeta.visibility = View.GONE
+                return false
+            }
+
             val h = restante / 3600
             val m = (restante % 3600) / 60
             val s = restante % 60
@@ -506,31 +553,33 @@ class OverlayService : Service() {
             txtReloj?.text = String.format("%02d:%02d:%02d", h, m, s)
             txtReloj?.textSize = 26f
 
-            if (restante <= 120) {
-                actualizarEstiloCaja("#EF4444", "#FCA5A5", "#FACC15")
-                tarjeta.visibility = View.VISIBLE
+            if (esAlerta) {
+                actualizarEstiloCaja("TIMER_ALERTA", "#EF4444", "#FCA5A5", "#FACC15")
             } else {
-                actualizarEstiloCaja("#22C55E", "#86EFAC", "#FFFFFF")
-                tarjeta.visibility = if (ahoraMs < ocultarEnMillis) View.VISIBLE else View.GONE
+                actualizarEstiloCaja("TIMER_NORMAL", "#22C55E", "#86EFAC", "#FFFFFF")
             }
-            return
+
+            if (tarjeta.visibility != View.VISIBLE) tarjeta.visibility = View.VISIBLE
+            return true
         } else {
             ultimoFinRegistrado = 0L
         }
 
         // 3. Mantener visible la pantalla de bloqueo si está activa
         if (bloqueoPantallaActivo) {
-            rootBloqueoView?.visibility = View.VISIBLE
-            tarjeta.visibility = View.GONE
+            if (rootBloqueoView?.visibility != View.VISIBLE) rootBloqueoView?.visibility = View.VISIBLE
+            if (tarjeta.visibility != View.GONE) tarjeta.visibility = View.GONE
             controlarAnimacion(true)
-            return
+            return false
         }
 
         // 4. Cartel inicial de conexión (6 segundos al iniciar)
         if (ahoraMs < diagnosticoHastaMillis) {
-            tarjeta.visibility = View.VISIBLE
+            if (tarjeta.visibility != View.VISIBLE) tarjeta.visibility = View.VISIBLE
+            return true
         } else {
-            tarjeta.visibility = View.GONE
+            if (tarjeta.visibility != View.GONE) tarjeta.visibility = View.GONE
+            return false
         }
     }
 
